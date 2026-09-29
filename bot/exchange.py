@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Sequence
@@ -32,8 +33,22 @@ class KucoinAccount:
                                      "password": creds["KUCOIN_API_PASSPHRASE"]})
         self.exchange.load_markets()
 
+    @staticmethod
+    def _retry(fn, attempts: int = 4, wait_s: float = 5.0):
+        """Retry a read-only call on network or rate-limit errors. Never used for orders."""
+        import ccxt
+        for attempt in range(1, attempts + 1):
+            try:
+                return fn()
+            except ccxt.NetworkError as exc:
+                if attempt == attempts:
+                    raise
+                logger.warning("exchange read failed (attempt %d/%d): %s", attempt, attempts, exc)
+                time.sleep(wait_s * attempt)
+
     def free(self, asset: str) -> float:
-        return float(self.exchange.fetch_balance().get(asset, {}).get("free") or 0.0)
+        balance = self._retry(self.exchange.fetch_balance)
+        return float(balance.get(asset, {}).get("free") or 0.0)
 
     def is_holding(self, symbol: str) -> bool:
         """True if the free base-coin balance is above the exchange minimum order size."""
@@ -45,7 +60,7 @@ class KucoinAccount:
         """Split free USDT equally over the coins not currently held (this one included)."""
         not_held = [s for s in all_symbols if s == symbol or not self.is_holding(s)]
         usdt = self.free("USDT") / len(not_held)
-        price = self.exchange.fetch_ticker(symbol)["last"]
+        price = self._retry(lambda: self.exchange.fetch_ticker(symbol))["last"]
         amount = _round_down(usdt / price, self.exchange.market(symbol)["precision"]["amount"])
         logger.info("%s: using %.2f USDT (1/%d of free) at %s -> %s", symbol, usdt, len(not_held), price, amount)
         return amount
