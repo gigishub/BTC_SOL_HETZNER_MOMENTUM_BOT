@@ -23,6 +23,7 @@ def indicators(df: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
     out["ema_trend"] = c.ewm(span=p.ema_trend_length, adjust=False).mean()
     out["ema_is_bullish"] = c.ewm(span=p.ema_is_bullish_length, adjust=False).mean()
     out["trail_source"] = out["low"].rolling(p.trail_lookback).max()
+    out["atr_size_pct"] = tr.rolling(p.size_atr_length).mean() / c
 
     ready = out["atr_sl"].notna() & out["atr_vola"].notna() & out["ema_trend"].notna()
     bullish = (c > out["ema_trend"]) & (c > out["ema_is_bullish"]) & ready
@@ -87,6 +88,7 @@ class Decision:
     stop: float          # trailing stop as of the last close (nan when flat)
     signal: str          # signal from the last close
     entry_ok: bool       # entry filter result from the last close
+    size: float = 1.0    # fraction of the coin's slot to buy on entry
 
 
 def decide_today(closed: pd.DataFrame, p: StrategyParams, bar: pd.Timedelta) -> Decision:
@@ -104,4 +106,12 @@ def decide_today(closed: pd.DataFrame, p: StrategyParams, bar: pd.Timedelta) -> 
     else:
         event = "flat"
     return Decision(int(now["in_trade"]), event, closed.index[-1], float(prev["close"]),
-                    float(prev["trail_sl"]), str(now["signal"]), bool(now["entry_ok"]))
+                    float(prev["trail_sl"]), str(now["signal"]), bool(now["entry_ok"]),
+                    position_size(prev["atr_size_pct"], p.size_target))
+
+
+def position_size(atr_pct: float, target: float | None) -> float:
+    """min(1, target / ATR%); full size when sizing is off or ATR is unknown."""
+    if target is None or not np.isfinite(atr_pct) or atr_pct <= 0:
+        return 1.0
+    return min(1.0, target / atr_pct)

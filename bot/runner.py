@@ -32,8 +32,8 @@ def run_symbol(cfg: SymbolConfig, account, all_symbols: list[str], dry_run: bool
     d = decide_today(closed, cfg.params, bar_length(cfg.timeframe))
     holding = account.is_holding(cfg.symbol)
     action = choose_action(d, holding)
-    logger.info("%s | last close %s = %.4f | signal=%s entry_ok=%s stop=%.4f | strategy=%s (%s) | holding=%s -> %s",
-                cfg.symbol, d.last_close_time.date(), d.last_close, d.signal, d.entry_ok, d.stop,
+    logger.info("%s | last close %s = %.4f | signal=%s entry_ok=%s stop=%.4f size=%.2f | strategy=%s (%s) | holding=%s -> %s",
+                cfg.symbol, d.last_close_time.date(), d.last_close, d.signal, d.entry_ok, d.stop, d.size,
                 "IN" if d.target else "OUT", d.event, holding, action.upper())
 
     if action == MISSED:
@@ -46,7 +46,7 @@ def run_symbol(cfg: SymbolConfig, account, all_symbols: list[str], dry_run: bool
         else:
             logger.info("%s: market SELL %s -> %s", cfg.symbol, amount, account.market_sell(cfg.symbol, amount))
     elif action == BUY:
-        amount = account.buy_amount(cfg.symbol, all_symbols)
+        amount = account.buy_amount(cfg.symbol, all_symbols, d.size)
         if dry_run:
             logger.info("%s: DRY RUN - would market BUY %s", cfg.symbol, amount)
         else:

@@ -56,13 +56,16 @@ class KucoinAccount:
         min_amount = self.exchange.market(symbol)["limits"]["amount"]["min"] or 0.0
         return self.free(base) > min_amount
 
-    def buy_amount(self, symbol: str, all_symbols: Sequence[str]) -> float:
-        """Split free USDT equally over the coins not currently held (this one included)."""
-        not_held = [s for s in all_symbols if s == symbol or not self.is_holding(s)]
-        usdt = self.free("USDT") / len(not_held)
-        price = self._retry(lambda: self.exchange.fetch_ticker(symbol))["last"]
-        amount = _round_down(usdt / price, self.exchange.market(symbol)["precision"]["amount"])
-        logger.info("%s: using %.2f USDT (1/%d of free) at %s -> %s", symbol, usdt, len(not_held), price, amount)
+    def buy_amount(self, symbol: str, all_symbols: Sequence[str], size: float = 1.0) -> float:
+        """Slot = account value / number of coins, times size; capped at free USDT."""
+        balance = self._retry(self.exchange.fetch_balance)
+        free = lambda asset: float(balance.get(asset, {}).get("free") or 0.0)
+        prices = {s: self._retry(lambda s=s: self.exchange.fetch_ticker(s))["last"] for s in all_symbols}
+        value = free("USDT") + sum(free(s.split("-")[0]) * prices[s] for s in all_symbols)
+        usdt = min(free("USDT"), value / len(all_symbols) * size)
+        amount = _round_down(usdt / prices[symbol], self.exchange.market(symbol)["precision"]["amount"])
+        logger.info("%s: using %.2f USDT (account %.2f / %d x size %.2f) at %s -> %s",
+                    symbol, usdt, value, len(all_symbols), size, prices[symbol], amount)
         return amount
 
     def sell_amount(self, symbol: str) -> float:

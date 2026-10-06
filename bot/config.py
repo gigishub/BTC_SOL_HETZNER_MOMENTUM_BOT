@@ -19,6 +19,9 @@ class StrategyParams:
     # Entry filter: no new trade if the coin's return over ret_lookback bars is below ret_min. None = off.
     ret_min: Optional[float] = None
     ret_lookback: int = 20
+    # Position size at entry: min(1, size_target / ATR%), ATR over size_atr_length bars. None = full slot.
+    size_target: Optional[float] = None
+    size_atr_length: int = 14
 
 
 @dataclass(frozen=True)
@@ -28,10 +31,9 @@ class SymbolConfig:
     params: StrategyParams = field(default_factory=StrategyParams)
 
 
-# Order matters: sizing of the later coin depends on whether the earlier one is held.
 SYMBOLS = [
-    SymbolConfig("SOL-USDT"),
-    SymbolConfig("BTC-USDT", params=StrategyParams(ret_min=-0.03)),
+    SymbolConfig("SOL-USDT", params=StrategyParams(size_target=0.05)),
+    SymbolConfig("BTC-USDT", params=StrategyParams(ret_min=-0.03, size_target=0.05)),
 ]
 
 LOOKBACK_BARS = 1500  # KuCoin max per request; enough to fully warm up EMA240

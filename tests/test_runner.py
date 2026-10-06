@@ -10,8 +10,8 @@ from bot.config import SymbolConfig
 from bot.signals import Decision
 
 
-def decision(target: int, event: str) -> Decision:
-    return Decision(target, event, pd.Timestamp("2026-01-01", tz="UTC"), 1.0, float("nan"), "buy", True)
+def decision(target: int, event: str, size: float = 1.0) -> Decision:
+    return Decision(target, event, pd.Timestamp("2026-01-01", tz="UTC"), 1.0, float("nan"), "buy", True, size)
 
 
 @pytest.mark.parametrize("target,event,holding,expected", [
@@ -36,8 +36,8 @@ class FakeAccount:
     def is_holding(self, symbol):
         return self.holding
 
-    def buy_amount(self, symbol, all_symbols):
-        return 1.0
+    def buy_amount(self, symbol, all_symbols, size=1.0):
+        return size
 
     def sell_amount(self, symbol):
         return 1.0
@@ -61,3 +61,11 @@ def test_run_symbol_places_orders_only_when_live(monkeypatch, dry_run, holding, 
     acct = FakeAccount(holding)
     runner.run_symbol(SymbolConfig("BTC-USDT"), acct, ["SOL-USDT", "BTC-USDT"], dry_run=dry_run)
     assert acct.orders == expected_orders
+
+
+def test_run_symbol_buys_the_decided_size(monkeypatch):
+    monkeypatch.setattr(runner, "closed_candles", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(runner, "decide_today", lambda *a, **k: decision(1, "entry", size=0.4))
+    acct = FakeAccount(False)
+    runner.run_symbol(SymbolConfig("BTC-USDT"), acct, ["SOL-USDT", "BTC-USDT"], dry_run=False)
+    assert acct.orders == [("buy", "BTC-USDT", 0.4)]
