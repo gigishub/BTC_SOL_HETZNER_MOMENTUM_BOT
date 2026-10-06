@@ -112,6 +112,7 @@ def account_view(bal: pd.DataFrame) -> dict | None:
         "change_24h": None if prev is None else total - prev,
         "change_24h_pct": None if not prev else 100 * (total / prev - 1),
         "history": [float(v) for v in bal["total_usdt"]],
+        "history_t": [int(x.timestamp()) for x in t],
         "first_time": str(bal["time"].iloc[0]),
     }
 
@@ -160,7 +161,7 @@ PAGE = """<!doctype html>
  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:8px 0}
  .tile{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:10px}
  .tile .big{font-size:20px;font-weight:600;margin:2px 0}
- .spark{width:100%;height:60px;display:block}
+ details{margin-top:8px} summary{cursor:pointer;color:#8b949e;font-size:13px}
 </style></head><body>
 <h1>Bot dashboard <span class="k" id="upd"></span></h1>
 <div class="card"><h2>Account (KuCoin)</h2><div id="acct" class="k">No balance snapshot yet.</div></div>
@@ -170,6 +171,26 @@ PAGE = """<!doctype html>
 <script>
 const f=(x,d=2)=>x==null?'-':Number(x).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
 const pc=x=>x==null?'-':`<span class="${x>=0?'pos':'neg'}">${x>=0?'+':''}${x.toFixed(1)}%</span>`;
+function valueChart(ts,vals){
+ const W=800,H=260,L=70,R=15,T=10,B=40,pw=W-L-R,ph=H-T-B;
+ let lo=Math.min(...vals),hi=Math.max(...vals); const pad=(hi-lo)*0.1||Math.max(1,hi*0.01); lo-=pad; hi+=pad;
+ const t0=ts[0],t1=ts[ts.length-1]||t0+1,x=t=>L+(t-t0)/((t1-t0)||1)*pw,y=v=>T+(hi-v)/(hi-lo)*ph;
+ const span=t1-t0,two=n=>String(n).padStart(2,'0');
+ const lab=t=>{const d=new Date(t*1000),day=`${two(d.getUTCDate())}.${two(d.getUTCMonth()+1)}`,hm=`${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
+  return span<12*3600?hm:span<14*86400?`${day} ${hm}`:day;};
+ let g='';
+ for(let i=0;i<=4;i++){const v=lo+(hi-lo)*i/4,yy=y(v);
+  g+=`<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="#21262d"/><text x="${L-6}" y="${yy+4}" text-anchor="end" fill="#8b949e" font-size="11">${f(v)}</text>`;}
+ for(let i=0;i<=5;i++){const t=t0+(t1-t0)*i/5,xx=x(t);
+  g+=`<line x1="${xx}" x2="${xx}" y1="${T}" y2="${T+ph}" stroke="#21262d"/><text x="${xx}" y="${H-B+16}" text-anchor="${i==0?'start':i==5?'end':'middle'}" fill="#8b949e" font-size="11">${lab(t)}</text>`;}
+ const pts=vals.map((v,i)=>`${x(ts[i]).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+ const dots=vals.map((v,i)=>`<circle cx="${x(ts[i]).toFixed(1)}" cy="${y(v).toFixed(1)}" r="5" fill="#2ea043" fill-opacity="0.01"><title>${new Date(ts[i]*1000).toISOString().slice(0,16).replace('T',' ')} UTC: ${f(v)} USDT</title></circle>`).join('');
+ return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${g}
+  <polyline points="${pts}" fill="none" stroke="#2ea043" stroke-width="2"/>${dots}
+  <text x="${L+pw/2}" y="${H-4}" text-anchor="middle" fill="#8b949e" font-size="11">time (UTC)</text>
+  <text x="12" y="${T+ph/2}" fill="#8b949e" font-size="11" transform="rotate(-90 12 ${T+ph/2})" text-anchor="middle">USDT</text></svg>
+  <div class="legend">Hover a point for its exact time and value.</div>`;
+}
 fetch('/api/data').then(r=>r.json()).then(data=>{
  document.getElementById('upd').textContent='updated '+data.updated;
  const a=data.account;
@@ -177,19 +198,18 @@ fetch('/api/data').then(r=>r.json()).then(data=>{
   const tile=(label,big,sub)=>`<div class="tile"><div class="k">${label}</div><div class="big">${big}</div><div class="k">${sub}</div></div>`;
   const chg=a.change_24h==null?'not enough history yet':
    `<span class="${a.change_24h>=0?'pos':'neg'}">${a.change_24h>=0?'+':''}${f(a.change_24h)} USDT (${a.change_24h>=0?'+':''}${a.change_24h_pct.toFixed(1)}%)</span> vs 24 h ago`;
-  let spark='';
+  let line='<div class="legend">The line appears after the second snapshot.</div>';
   if(a.history.length>1){
-   const h=a.history,lo=Math.min(...h),hi=Math.max(...h),r=(hi-lo)||1;
-   const pts=h.map((v,i)=>`${(i/(h.length-1)*100).toFixed(2)},${(55-(v-lo)/r*50).toFixed(2)}`).join(' ');
-   spark=`<svg class="spark" viewBox="0 0 100 60" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="#2ea043" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>
-    <div class="legend">Total value since ${a.first_time} UTC · low ${f(lo)} · high ${f(hi)} USDT</div>`;
+   const h=a.history,ts=a.history_t,d0=a.total-h[0],p0=100*(a.total/h[0]-1);
+   line=`<div class="v" style="margin:6px 0"><span class="${d0>=0?'pos':'neg'}">${d0>=0?'+':''}${f(d0)} USDT (${d0>=0?'+':''}${p0.toFixed(1)}%)</span> since ${a.first_time} UTC (started at ${f(h[0])} USDT)</div>`+valueChart(ts,h);
   }
   document.getElementById('acct').innerHTML=`
    <div class="tiles">
     ${tile('Total value',f(a.total)+' USDT',chg)}
     ${tile('Cash (not invested)',f(a.cash)+' USDT',a.cash_pct.toFixed(0)+'% of account')}
     ${a.coins.map(c=>tile(`In ${c.coin}`,f(c.usdt)+' USDT',`${c.qty} ${c.coin} · ${c.pct.toFixed(0)}% of account`)).join('')}
-   </div>${spark}
+   </div>
+   <details><summary>Account value over time (${a.history.length} snapshots)</summary>${line}</details>
    <div class="legend">Coins valued at the last price. Snapshot ${a.time} UTC (${a.age_min} min ago${a.age_min>90?' — <span class="neg">hourly snapshot may have stopped</span>':''}).</div>`;
  }
  const root=document.getElementById('root'); root.innerHTML='';
