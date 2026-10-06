@@ -15,4 +15,6 @@ if ! flock -n 9; then
   exit 0
 fi
 
-timeout 30m python -c "from trade_BTC_SOL import trade_SOL, trade_BTC; trade_SOL(False, wait_for_candle=True); trade_BTC(False, wait_for_candle=True)"
+# Old bot (rollback: swap the two commands):
+# timeout 30m python -c "from trade_BTC_SOL import trade_SOL, trade_BTC; trade_SOL(False, wait_for_candle=True); trade_BTC(False, wait_for_candle=True)"
+timeout 30m python -m bot.runner

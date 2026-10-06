@@ -56,16 +56,26 @@ class KucoinAccount:
         min_amount = self.exchange.market(symbol)["limits"]["amount"]["min"] or 0.0
         return self.free(base) > min_amount
 
-    def buy_amount(self, symbol: str, all_symbols: Sequence[str], size: float = 1.0) -> float:
-        """Slot = account value / number of coins, times size; capped at free USDT."""
+    def snapshot(self, all_symbols: Sequence[str]) -> dict:
+        """Free USDT, each coin's free amount, price and USDT value, and the account total."""
         balance = self._retry(self.exchange.fetch_balance)
         free = lambda asset: float(balance.get(asset, {}).get("free") or 0.0)
-        prices = {s: self._retry(lambda s=s: self.exchange.fetch_ticker(s))["last"] for s in all_symbols}
-        value = free("USDT") + sum(free(s.split("-")[0]) * prices[s] for s in all_symbols)
-        usdt = min(free("USDT"), value / len(all_symbols) * size)
-        amount = _round_down(usdt / prices[symbol], self.exchange.market(symbol)["precision"]["amount"])
+        coins = {}
+        for s in all_symbols:
+            price = self._retry(lambda s=s: self.exchange.fetch_ticker(s))["last"]
+            qty = free(s.split("-")[0])
+            coins[s] = {"qty": qty, "price": price, "value": qty * price}
+        usdt = free("USDT")
+        return {"usdt": usdt, "coins": coins, "total": usdt + sum(c["value"] for c in coins.values())}
+
+    def buy_amount(self, symbol: str, all_symbols: Sequence[str], size: float = 1.0) -> float:
+        """Slot = account value / number of coins, times size; capped at free USDT."""
+        snap = self.snapshot(all_symbols)
+        usdt = min(snap["usdt"], snap["total"] / len(all_symbols) * size)
+        price = snap["coins"][symbol]["price"]
+        amount = _round_down(usdt / price, self.exchange.market(symbol)["precision"]["amount"])
         logger.info("%s: using %.2f USDT (account %.2f / %d x size %.2f) at %s -> %s",
-                    symbol, usdt, value, len(all_symbols), size, prices[symbol], amount)
+                    symbol, usdt, snap["total"], len(all_symbols), size, price, amount)
         return amount
 
     def sell_amount(self, symbol: str) -> float:

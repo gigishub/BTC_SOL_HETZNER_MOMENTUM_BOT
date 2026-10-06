@@ -93,3 +93,19 @@ def test_slot_is_capped_at_free_usdt():
     # SOL position grew to 900: account 1300, slot 650, but only 400 USDT free.
     amt = account({"USDT": 400.0, "SOL": 9.0}, PRICES).buy_amount("BTC-USDT", SYMS, 1.0)
     assert amt * 50_000 == pytest.approx(400.0)
+
+
+def test_snapshot_values_the_account():
+    snap = account({"USDT": 800.0, "SOL": 2.0}, PRICES).snapshot(SYMS)
+    assert snap["total"] == pytest.approx(1000.0)
+    assert snap["coins"]["SOL-USDT"]["value"] == pytest.approx(200.0)
+
+
+def test_balance_record_appends_rows(tmp_path):
+    from bot.balance import read, record
+    path = tmp_path / "balance.csv"
+    acct = account({"USDT": 800.0, "SOL": 2.0}, PRICES)
+    record(acct, SYMS, path)
+    record(acct, SYMS, path)
+    df = read(path)
+    assert len(df) == 2 and df.total_usdt.iloc[-1] == pytest.approx(1000.0) and df.sol_usdt.iloc[0] == pytest.approx(200.0)

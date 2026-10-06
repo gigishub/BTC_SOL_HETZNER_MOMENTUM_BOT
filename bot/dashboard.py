@@ -1,6 +1,6 @@
 """Read-only browser dashboard: candles, trailing stop, entries/exits and the latest bot log lines.
 
-Uses only public KuCoin candles and the strategy code; it never touches the API keys or places orders.
+Uses only public KuCoin candles, the strategy code and balance.csv; it never touches the API keys or places orders.
 Usage: python -m bot.dashboard [--port 8080]   (listens on localhost only; reach it with an SSH tunnel)
 """
 
@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 from flask import Flask, jsonify, render_template_string
 
+from .balance import read as read_balance
 from .config import SYMBOLS, SymbolConfig
 from .data import bar_length, fetch_candles
 from .signals import compute_state, decide_today
@@ -106,10 +107,15 @@ def api_data():
             views.append(symbol_view(cfg))
         except Exception as exc:
             views.append({"symbol": cfg.symbol, "error": str(exc)})
+    bal = read_balance()
+    series = bal.drop_duplicates("time", keep="last") if len(bal) else bal
     return jsonify({
+        "balance": bal.iloc[-1].to_dict() if len(bal) else None,
+        "balance_series": [{"time": int(pd.Timestamp(t, tz="UTC").timestamp()), "value": float(v)}
+                           for t, v in zip(series.get("time", []), series.get("total_usdt", []))],
         "symbols": views,
         "dry_log": log_tail(DRY_LOG),
-        "live_log": log_tail(LIVE_LOG, 12, r"WARNING|ERROR|Trade|BUY|SELL|order|balance|No action"),
+        "live_log": log_tail(LIVE_LOG, 12, r"WARNING|ERROR|Trade|BUY|SELL|order|balance|No action|->|account value"),
         "updated": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
     })
 
@@ -131,14 +137,25 @@ PAGE = """<!doctype html>
  .legend{font-size:12px;color:#8b949e;margin-top:4px}
 </style></head><body>
 <h1>Bot dashboard <span class="k" id="upd"></span></h1>
+<div class="card"><div class="head"><h2>Account</h2><span id="bal" class="k">no balance snapshot yet</span></div>
+ <div class="chart" id="balch" style="height:200px"></div>
+ <div class="legend">Total account value in USDT (free USDT + coins at last price), recorded hourly.</div></div>
 <div id="root">Loading...</div>
-<div class="card"><h2>Dry run log (new bot, 00:15 UTC)</h2><pre id="dry"></pre></div>
-<div class="card"><h2>Live run log (00:00 UTC, filtered)</h2><pre id="live"></pre></div>
+<div class="card"><h2>Dry run log (stopped at switch day)</h2><pre id="dry"></pre></div>
+<div class="card"><h2>Live run log (new bot, 00:00 UTC, filtered)</h2><pre id="live"></pre></div>
 <script>
 const f=(x,d=2)=>x==null?'-':Number(x).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
 const pc=x=>x==null?'-':`<span class="${x>=0?'pos':'neg'}">${x>=0?'+':''}${x.toFixed(1)}%</span>`;
 fetch('/api/data').then(r=>r.json()).then(data=>{
  document.getElementById('upd').textContent='updated '+data.updated;
+ const b=data.balance;
+ if(b){document.getElementById('bal').innerHTML=`<span><span class="k">total</span><br><span class="v"><b>${f(b.total_usdt)} USDT</b></span></span>
+  &nbsp; <span><span class="k">free USDT</span><br><span class="v">${f(b.free_usdt)}</span></span>
+  ${Object.keys(b).filter(k=>k.endsWith('_usdt')&&!['total_usdt','free_usdt'].includes(k)).map(k=>`&nbsp; <span><span class="k">${k.replace('_usdt','').toUpperCase()}</span><br><span class="v">${f(b[k])}</span></span>`).join('')}
+  &nbsp; <span class="k">as of ${b.time} UTC</span>`;
+  const bc=LightweightCharts.createChart(document.getElementById('balch'),{autoSize:true,
+   layout:{background:{color:'#161b22'},textColor:'#8b949e'},grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}}});
+  bc.addLineSeries({color:'#2ea043',lineWidth:2}).setData(data.balance_series); bc.timeScale().fitContent();}
  const root=document.getElementById('root'); root.innerHTML='';
  data.symbols.forEach((s,i)=>{
   const c=document.createElement('div'); c.className='card';

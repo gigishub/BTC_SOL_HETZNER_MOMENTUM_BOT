@@ -71,6 +71,11 @@ def main(argv=None) -> int:
         except Exception:
             logger.exception("%s: run failed", cfg.symbol)
             failed = True
+    try:
+        from .balance import record
+        record(account, symbols)
+    except Exception:
+        logger.exception("balance snapshot failed")
     logger.info("=== run end ===")
     return 1 if failed else 0
 
