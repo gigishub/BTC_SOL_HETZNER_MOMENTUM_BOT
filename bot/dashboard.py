@@ -90,6 +90,32 @@ def symbol_view(cfg: SymbolConfig) -> dict:
     }
 
 
+def account_view(bal: pd.DataFrame) -> dict | None:
+    """Latest snapshot split into cash and coins, change over 24 h, and the history of totals."""
+    if not len(bal):
+        return None
+    bal = bal.drop_duplicates("time", keep="last")
+    t = pd.to_datetime(bal["time"]).dt.tz_localize("UTC")
+    last = bal.iloc[-1]
+    total = float(last["total_usdt"])
+    coins = [c[:-5] for c in bal.columns if c.endswith("_usdt") and c not in ("total_usdt", "free_usdt")]
+    day_ago = bal[t <= t.iloc[-1] - pd.Timedelta(hours=24)]
+    prev = float(day_ago["total_usdt"].iloc[-1]) if len(day_ago) else None
+    return {
+        "time": str(last["time"]),
+        "age_min": int((pd.Timestamp.now(tz="UTC") - t.iloc[-1]).total_seconds() // 60),
+        "total": total,
+        "cash": float(last["free_usdt"]),
+        "cash_pct": 100 * float(last["free_usdt"]) / total if total else 0,
+        "coins": [{"coin": c.upper(), "qty": float(last[f"{c}_qty"]), "usdt": float(last[f"{c}_usdt"]),
+                   "pct": 100 * float(last[f"{c}_usdt"]) / total if total else 0} for c in coins],
+        "change_24h": None if prev is None else total - prev,
+        "change_24h_pct": None if not prev else 100 * (total / prev - 1),
+        "history": [float(v) for v in bal["total_usdt"]],
+        "first_time": str(bal["time"].iloc[0]),
+    }
+
+
 def log_tail(path: Path, lines: int = 12, pattern: str | None = None) -> list[str]:
     if not path.exists():
         return []
@@ -107,12 +133,8 @@ def api_data():
             views.append(symbol_view(cfg))
         except Exception as exc:
             views.append({"symbol": cfg.symbol, "error": str(exc)})
-    bal = read_balance()
-    series = bal.drop_duplicates("time", keep="last") if len(bal) else bal
     return jsonify({
-        "balance": bal.iloc[-1].to_dict() if len(bal) else None,
-        "balance_series": [{"time": int(pd.Timestamp(t, tz="UTC").timestamp()), "value": float(v)}
-                           for t, v in zip(series.get("time", []), series.get("total_usdt", []))],
+        "account": account_view(read_balance()),
         "symbols": views,
         "dry_log": log_tail(DRY_LOG),
         "live_log": log_tail(LIVE_LOG, 12, r"WARNING|ERROR|Trade|BUY|SELL|order|balance|No action|->|account value"),
@@ -135,11 +157,13 @@ PAGE = """<!doctype html>
  td,th{text-align:left;padding:4px 8px;border-bottom:1px solid #21262d;font-size:13px}
  pre{margin:0;white-space:pre-wrap;font-size:12px;color:#c9d1d9;overflow-x:auto}
  .legend{font-size:12px;color:#8b949e;margin-top:4px}
+ .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:8px 0}
+ .tile{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:10px}
+ .tile .big{font-size:20px;font-weight:600;margin:2px 0}
+ .spark{width:100%;height:60px;display:block}
 </style></head><body>
 <h1>Bot dashboard <span class="k" id="upd"></span></h1>
-<div class="card"><div class="head"><h2>Account</h2><span id="bal" class="k">no balance snapshot yet</span></div>
- <div class="chart" id="balch" style="height:200px"></div>
- <div class="legend">Total account value in USDT (free USDT + coins at last price), recorded hourly.</div></div>
+<div class="card"><h2>Account (KuCoin)</h2><div id="acct" class="k">No balance snapshot yet.</div></div>
 <div id="root">Loading...</div>
 <div class="card"><h2>Dry run log (stopped at switch day)</h2><pre id="dry"></pre></div>
 <div class="card"><h2>Live run log (new bot, 00:00 UTC, filtered)</h2><pre id="live"></pre></div>
@@ -148,14 +172,26 @@ const f=(x,d=2)=>x==null?'-':Number(x).toLocaleString(undefined,{minimumFraction
 const pc=x=>x==null?'-':`<span class="${x>=0?'pos':'neg'}">${x>=0?'+':''}${x.toFixed(1)}%</span>`;
 fetch('/api/data').then(r=>r.json()).then(data=>{
  document.getElementById('upd').textContent='updated '+data.updated;
- const b=data.balance;
- if(b){document.getElementById('bal').innerHTML=`<span><span class="k">total</span><br><span class="v"><b>${f(b.total_usdt)} USDT</b></span></span>
-  &nbsp; <span><span class="k">free USDT</span><br><span class="v">${f(b.free_usdt)}</span></span>
-  ${Object.keys(b).filter(k=>k.endsWith('_usdt')&&!['total_usdt','free_usdt'].includes(k)).map(k=>`&nbsp; <span><span class="k">${k.replace('_usdt','').toUpperCase()}</span><br><span class="v">${f(b[k])}</span></span>`).join('')}
-  &nbsp; <span class="k">as of ${b.time} UTC</span>`;
-  const bc=LightweightCharts.createChart(document.getElementById('balch'),{autoSize:true,
-   layout:{background:{color:'#161b22'},textColor:'#8b949e'},grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}}});
-  bc.addLineSeries({color:'#2ea043',lineWidth:2}).setData(data.balance_series); bc.timeScale().fitContent();}
+ const a=data.account;
+ if(a){
+  const tile=(label,big,sub)=>`<div class="tile"><div class="k">${label}</div><div class="big">${big}</div><div class="k">${sub}</div></div>`;
+  const chg=a.change_24h==null?'not enough history yet':
+   `<span class="${a.change_24h>=0?'pos':'neg'}">${a.change_24h>=0?'+':''}${f(a.change_24h)} USDT (${a.change_24h>=0?'+':''}${a.change_24h_pct.toFixed(1)}%)</span> vs 24 h ago`;
+  let spark='';
+  if(a.history.length>1){
+   const h=a.history,lo=Math.min(...h),hi=Math.max(...h),r=(hi-lo)||1;
+   const pts=h.map((v,i)=>`${(i/(h.length-1)*100).toFixed(2)},${(55-(v-lo)/r*50).toFixed(2)}`).join(' ');
+   spark=`<svg class="spark" viewBox="0 0 100 60" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="#2ea043" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>
+    <div class="legend">Total value since ${a.first_time} UTC · low ${f(lo)} · high ${f(hi)} USDT</div>`;
+  }
+  document.getElementById('acct').innerHTML=`
+   <div class="tiles">
+    ${tile('Total value',f(a.total)+' USDT',chg)}
+    ${tile('Cash (not invested)',f(a.cash)+' USDT',a.cash_pct.toFixed(0)+'% of account')}
+    ${a.coins.map(c=>tile(`In ${c.coin}`,f(c.usdt)+' USDT',`${c.qty} ${c.coin} · ${c.pct.toFixed(0)}% of account`)).join('')}
+   </div>${spark}
+   <div class="legend">Coins valued at the last price. Snapshot ${a.time} UTC (${a.age_min} min ago${a.age_min>90?' — <span class="neg">hourly snapshot may have stopped</span>':''}).</div>`;
+ }
  const root=document.getElementById('root'); root.innerHTML='';
  data.symbols.forEach((s,i)=>{
   const c=document.createElement('div'); c.className='card';
